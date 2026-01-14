@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -98,8 +97,29 @@ func TestMessageMarshalJSON(t *testing.T) {
 		parsed, err := json.Marshal(message)
 
 		// then
-		fmt.Println(string(parsed))
 		assert.NoError(t, err)
 		assert.Equal(t, parsed, []byte(`{"type":"chat","sender":"Gabe","room":"Room1","content":"Hello World","timestamp":"2026-01-14T19:22:10Z"}`))
+	})
+}
+
+func TestMessageUnmarshalJSON(t *testing.T) {
+	t.Run("correctly unmarshals message", func(t *testing.T) {
+		// given
+		message := `{"type":"chat","sender":"Gabe","room":"Room1","content":"Hello World","timestamp":"2026-01-14T19:22:10Z"}`
+
+		// when
+		m := Message{}
+		err := json.Unmarshal([]byte(message), &m)
+
+		// then
+		content := "Hello World"
+		assert.NoError(t, err)
+		assert.Equal(t, m, Message{
+			Type:      Chat,
+			Sender:    "Gabe",
+			Room:      "Room1",
+			Content:   &content,
+			Timestamp: time.Date(2026, time.January, 14, 19, 22, 10, 0, time.UTC),
+		})
 	})
 }
