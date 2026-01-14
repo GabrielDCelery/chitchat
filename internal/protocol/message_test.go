@@ -1,7 +1,10 @@
 package protocol
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -20,7 +23,6 @@ func TestMessageTypeMarshalJSON(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				t.Parallel()
 				// when
 				result, err := tt.input.MarshalJSON()
 
@@ -32,7 +34,6 @@ func TestMessageTypeMarshalJSON(t *testing.T) {
 	})
 
 	t.Run("throws if it sees incorrect message type", func(t *testing.T) {
-		t.Parallel()
 		// given
 		mt := MessageType(999)
 
@@ -55,7 +56,6 @@ func TestMessageTypeUnmarshalJSON(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				t.Parallel()
 				// given
 				var mt MessageType
 
@@ -70,7 +70,6 @@ func TestMessageTypeUnmarshalJSON(t *testing.T) {
 	})
 
 	t.Run("throws if it sees incorrect message type", func(t *testing.T) {
-		t.Parallel()
 		// given
 		var mt MessageType
 
@@ -79,5 +78,28 @@ func TestMessageTypeUnmarshalJSON(t *testing.T) {
 
 		// then
 		assert.Error(t, err)
+	})
+}
+
+func TestMessageMarshalJSON(t *testing.T) {
+	t.Run("correctly marshals message", func(t *testing.T) {
+		// given
+		content := "Hello World"
+		message := Message{
+			Type:      Chat,
+			Sender:    "Gabe",
+			Room:      "Room1",
+			Content:   &content,
+			Timestamp: time.Date(2026, time.January, 14, 19, 22, 10, 0, time.UTC),
+			Metadata:  make(map[string]any),
+		}
+
+		// when
+		parsed, err := json.Marshal(message)
+
+		// then
+		fmt.Println(string(parsed))
+		assert.NoError(t, err)
+		assert.Equal(t, parsed, []byte(`{"type":"chat","sender":"Gabe","room":"Room1","content":"Hello World","timestamp":"2026-01-14T19:22:10Z"}`))
 	})
 }
