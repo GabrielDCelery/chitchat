@@ -138,3 +138,98 @@ Backend (Go):
 - Create `JSONEncoder` implementation
 - Test full `Message` struct marshaling/unmarshaling
 - Begin server package implementation
+
+---
+
+### Session 2 - 2026-01-14
+
+#### What We Built:
+
+- Implemented `internal/protocol/encoding.go`:
+  - `Encoder` interface for transport abstraction (JSON, protobuf, etc.)
+  - Defines `Encode(io.Writer, *Message)` and `Decode(io.Reader, *Message)` methods
+  - Enables swapping encoding formats without changing server/client code
+- Implemented `JSONEncoder` in `encoding.go`:
+  - Uses `json.NewEncoder(w).Encode()` for streaming (idiomatic Go)
+  - Uses `json.NewDecoder(r).Decode()` for reading
+  - Clean, single-line implementations
+- Wrote comprehensive tests in `internal/protocol/encoding_test.go`:
+  - Encode tests: success case, writer failure (using mock `failWriter`)
+  - Decode tests: success case, invalid message type
+  - Test helpers: `ptr()` for string pointers, `mustParseTime()` for timestamps
+  - Used `bytes.Buffer` for in-memory testing
+  - Handled `json.Encoder` newline behavior with `strings.TrimSpace()`
+  - All tests passing ✓
+
+#### Key Decisions:
+
+**Encoder Abstraction:**
+
+- Interface-based design allows protocol flexibility
+- Works with any `io.Reader`/`io.Writer` (WebSocket, TCP, UDP)
+- Future-proof: Can add protobuf, MessagePack, or custom encodings
+- Enables P2P extension later (same encoder for WebSocket signaling and UDP data)
+
+**Testing Strategy:**
+
+- Used `bytes.Buffer` as both reader and writer for testing
+- Created mock `failWriter` to test error handling
+- Helper functions (`ptr()`, `mustParseTime()`) make tests readable
+- Comprehensive coverage: happy paths and error cases
+
+**Architecture Insights:**
+
+- Discussed P2P networking: NAT traversal, hole punching, relay servers
+- Current server-based design naturally extends to P2P signaling server
+- Transport-agnostic protocol enables future hybrid P2P/relay architecture
+
+#### Go Patterns Learned:
+
+1. **Pointer vs Value Receivers**:
+   - Value receiver: When only reading fields or struct is empty
+   - Pointer receiver: When mutating fields or struct is large
+   - For immutable config, value receiver is clearer
+2. **io.Writer Contract**: Must return non-nil error if `n < len(p)` (prevents silent data loss)
+3. **Testing with io Interfaces**: `bytes.Buffer` implements both `io.Reader` and `io.Writer`
+4. **Mock Objects**: Creating test doubles (like `failWriter`) for error path testing
+5. **Test Helpers**: Small functions (`ptr()`, `mustParseTime()`) improve test readability
+6. **Forward Declarations**: Can reference types in same package defined later
+
+#### Server Architecture Planning:
+
+Started planning WebSocket server with three core components:
+
+**1. Client** (per-connection state):
+
+- Represents a connected user with WebSocket connection
+- Two goroutines: `readPump()` (reads from WS) and `writePump()` (writes to WS)
+- Buffered `send` channel for non-blocking message delivery
+- Implements heartbeat/keepalive with ping/pong
+
+**2. Room** (chat room management):
+
+- Groups clients by room ID
+- Thread-safe client map with `sync.RWMutex`
+- Broadcasts messages to all clients in room
+
+**3. Server** (hub pattern):
+
+- Central coordinator running single `Run()` goroutine
+- Manages rooms and clients via channels (register, unregister, broadcast)
+- Non-blocking, concurrent-safe message routing
+- Uses `protocol.Encoder` for serialization
+
+**Key Patterns**:
+
+- Hub pattern with channel-based communication
+- Goroutine per client for independent operation
+- Buffered channels prevent slow clients from blocking others
+- Graceful cleanup on disconnect
+
+#### Next Steps:
+
+- Implement `Client` struct and methods (`readPump`, `writePump`)
+- Implement `Room` struct for managing chat rooms
+- Implement `Server` struct with hub logic
+- Create WebSocket upgrade handler
+- Write tests for server components
