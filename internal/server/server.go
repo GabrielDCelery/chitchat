@@ -6,4 +6,5 @@ type Server struct {
 	register   chan *Client
 	unregister chan *Client
 	encoder    protocol.Encoder
+	broadcast  chan *protocol.Message
 }

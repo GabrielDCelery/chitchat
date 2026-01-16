@@ -45,15 +45,59 @@ func NewClient(id string, username string, conn *websocket.Conn, server *Server,
 
 func (c *Client) readPump(ctx context.Context) {
 	defer func() {
-		c.server.unregister <- c // tell the server that the client is diconnecting
+		c.server.unregister <- c // tell the server that the client is disconnecting
 		c.conn.Close()           // close the connection
 	}()
-	// Loop forever, reading messages from the WebSocket
-	// - Set read deadline (timeout)
-	// - Read message from c.conn
-	// - Decode using server.encoder
-	// - Send to server.broadcast channel
-	// - Handle errors (disconnect, invalid messages)
+	// set max message size limit
+	c.conn.SetReadLimit(maxMessageSize)
+	// start timeout clock
+	if err := c.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		c.logger.Error("failed to set read deadline", zap.Error(err))
+		return
+	}
+	c.conn.SetPongHandler(func(string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
+	for {
+		messageType, reader, err := c.conn.NextReader()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				c.logger.Info("closing client, context done")
+				return
+			default:
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					c.logger.Error("unexpected websocket closure", zap.Error(err))
+				} else {
+					c.logger.Info("client dropped", zap.Error(err))
+				}
+				return
+			}
+		}
+		if messageType != websocket.TextMessage {
+			c.logger.Warn("unexpected message type", zap.Int("messageType", messageType))
+			continue
+		}
+		var msg protocol.Message
+		err = c.server.encoder.Decode(reader, &msg)
+		if err != nil {
+			c.logger.Warn("received bad message from client", zap.Error(err))
+			continue
+		}
+		msg.Sender = c.username    // set the username
+		msg.Timestamp = time.Now() // we set when we received the message
+		select {
+		case <-ctx.Done():
+			c.logger.Info("closing client, context done")
+			return
+		case c.server.broadcast <- &msg:
+			c.logger.Debug("successfully broadcasted message")
+			continue
+		default:
+			c.logger.Warn("broadcast channel full, dropping the message")
+			continue
+		}
+	}
 }
 
 func (c *Client) writePump(ctx context.Context) {
@@ -109,8 +153,9 @@ func (c *Client) writePump(ctx context.Context) {
 				c.logger.Error("failed to encode message", zap.Error(err))
 				return
 			}
+			// send the frame
 			if err := w.Close(); err != nil {
-				c.logger.Error("failed to close writer", zap.Error(err))
+				c.logger.Error("failed to send frame", zap.Error(err))
 				return
 			}
 		}
