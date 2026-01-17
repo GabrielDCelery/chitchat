@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/GabrielDCelery/chitchat/internal/protocol"
@@ -22,20 +21,22 @@ const (
 type Client struct {
 	id       string
 	username string
+	room     string
 	conn     *websocket.Conn
 	server   *Server
 	send     chan *protocol.Message
 	logger   *zap.Logger
 }
 
-func NewClient(id string, username string, conn *websocket.Conn, server *Server, logger *zap.Logger) *Client {
+func NewClient(id string, username string, room string, conn *websocket.Conn, server *Server, logger *zap.Logger) *Client {
 	if logger == nil {
-		logger = zap.NewNop().Named(fmt.Sprintf("client-%s-%s", id, username))
+		logger = zap.NewNop()
 	}
-	logger = logger.With(zap.String("clientID", id), zap.String("username", username))
+	logger = logger.With(zap.String("clientID", id), zap.String("username", username), zap.String("room", room))
 	return &Client{
 		id:       id,
 		username: username,
+		room:     room,
 		conn:     conn,
 		server:   server,
 		send:     make(chan *protocol.Message, sendChanSize),

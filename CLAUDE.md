@@ -348,6 +348,7 @@ Time 108.1s: Receive PONG, reset deadline = now + 60s (168.1s total)
 #### Implementation Status:
 
 **Completed:**
+
 - ✅ `Client` struct with proper fields and logger
 - ✅ `writePump()` with streaming writes via `NextWriter()`
 - ✅ Ping mechanism for keepalive
@@ -356,9 +357,11 @@ Time 108.1s: Receive PONG, reset deadline = now + 60s (168.1s total)
 - ✅ Fixed interface pointer bug in `Server`
 
 **In Progress:**
+
 - 🔄 `readPump()` (guidance provided, ready to implement)
 
 **Next:**
+
 - Implement `readPump()` with message decoding and validation
 - Implement `Room` struct for managing chat rooms
 - Complete `Server` struct with hub logic
@@ -368,6 +371,7 @@ Time 108.1s: Receive PONG, reset deadline = now + 60s (168.1s total)
 #### Detailed Conversation Topics:
 
 See `ai-chat/` directory for full conversation details:
+
 - `24-session-3-ping-pong-deep-dive.md`: Ping/pong mechanism explained
 - `25-websocket-encoder-and-logging.md`: Interface errors, WebSocket encoding, logger patterns
 - `26-writepump-review-and-readpump-guide.md`: writePump review, deadlines, close messages, readPump guide
@@ -379,3 +383,193 @@ See `ai-chat/` directory for full conversation details:
 - Complete `Server` struct with hub logic and channels
 - Create WebSocket upgrade handler
 - Write tests for Client, Room, and Server components
+
+---
+
+### Session 4 - 2026-01-17
+
+#### What We Built:
+
+- Completed `Client.readPump()` implementation in `internal/server/client.go`:
+  - Implemented full message reading with proper error handling
+  - Used `websocket.IsUnexpectedCloseError()` for error differentiation
+  - Security: Override sender and timestamp on server side
+  - Non-blocking broadcast with overflow handling
+  - Fixed typos and added proper `continue` after decode errors
+- Implemented complete `Room` struct in `internal/server/room.go`:
+  - Thread-safe client management with `sync.RWMutex`
+  - `Add()`, `Remove()`, `Size()` methods with proper locking
+  - `Broadcast()` with non-blocking sends (select/default pattern)
+  - Broadcast statistics tracking (sent, dropped, total)
+  - Room-specific logger with baked-in context
+  - All tests passing ✓
+
+#### Key Decisions:
+
+**readPump Implementation:**
+
+- Moved `NextReader()` outside select for cleaner control flow
+- Check context cancellation after blocking read returns error
+- Continue on message errors, return on connection errors
+- Non-blocking broadcast prevents slow clients from blocking others
+
+**Room Architecture:**
+
+- Used `map[*Client]bool` for client set (simple, readable)
+- `RWMutex`: Write lock for Add/Remove, read lock for Broadcast/Size
+- Non-blocking broadcast critical: `select/default` prevents one slow client blocking all
+- Summary logging (1 log per broadcast vs 1000 logs for 1000 clients)
+- Empty room detection via `IsEmpty()` helper for cleanup
+
+**Thread Safety Deep Dive:**
+
+- Mutexes protect against Go's map panic on concurrent access
+- Room must be self-contained and thread-safe (encapsulation)
+- Even single-threaded Server can have races (Broadcast triggers unregister)
+- Future-proofing: Room safe to use from any goroutine
+
+**Context Discussion:**
+
+- Decided NOT to add context to `Broadcast()`, `Add()`, `Remove()`
+- Operations are instant (microseconds), nothing to cancel
+- Context belongs in long-running operations (Server.Run, Client pumps, DB queries)
+- Partial broadcasts would create inconsistent state
+
+#### Go Patterns Learned:
+
+1. **Map as Set Pattern**: `map[*Client]bool` for O(1) membership testing
+2. **RWMutex optimization**: Multiple readers, single writer pattern
+3. **Non-blocking channel send**: `select { case ch <- v: default: }` prevents deadlocks
+4. **Zero value initialization**: No need for `mu: sync.RWMutex{}`
+5. **Logger composition**: `logger.With()` returns new logger (must assign back!)
+6. **Delete from map**: `delete(map, key)` - safe even if key doesn't exist, safe on nil map
+7. **Encapsulation**: Struct protecting its own data with mutex methods
+8. **defer unlock pattern**: Always pair Lock/RLock with defer Unlock/RUnlock
+9. **Range over map**: `for client := range r.clients` iterates keys only
+10. **Safe iteration with deletion**: Can delete from map during iteration in Go
+
+#### Networking Deep Dive:
+
+Extensive discussion on TCP/IP fundamentals:
+
+**WebSocket over TCP:**
+
+- HTTP upgrade establishes ONE bidirectional TCP connection
+- WebSocket takes over same connection (HTTP abandoned)
+- Port is just an identifier in 4-tuple: (ClientIP, ClientPort, ServerIP, ServerPort)
+- Single TCP connection supports full-duplex communication
+
+**Server Port Multiplexing:**
+
+- All clients connect to server port 8080
+- OS distinguishes connections by full 4-tuple
+- Each connection gets separate socket/file descriptor
+- Listening socket accepts, connection sockets handle I/O
+
+**Client Ports:**
+
+- Ephemeral port (49152-65535) assigned by OS
+- Same port used for both send and receive (bidirectional)
+- Port doesn't change during WebSocket upgrade
+- Released when connection closes
+
+**NAT and Routing:**
+
+- NAT routers create stateful port mappings (not "listening")
+- Each NAT in chain adds translation layer
+- NAT mappings timeout if idle (why WebSocket ping/pong matters!)
+- Core internet routers just route (no NAT)
+- TCP flow control prevents kernel buffer overflow
+
+**Protocol Stack:**
+
+- Application: JSON message
+- WebSocket: Frame with header + payload
+- TCP: Segments (fragmented by MTU ~1460 bytes)
+- IP: Packets (wrap TCP segments)
+- Ethernet: Frames (physical transmission)
+
+#### Architecture Insights:
+
+**Server Hub Pattern:**
+Started planning Server implementation:
+
+- Central coordinator with single `Run()` goroutine
+- Three channels: register, unregister, broadcast
+- Manages room lifecycle (create on demand, delete when empty)
+- Uses `sync.RWMutex` to protect rooms map
+- Channel-based communication prevents race conditions
+
+**Server Methods:**
+
+- `handleRegister()`: Get or create room, add client
+- `handleUnregister()`: Remove client, close send channel, cleanup empty rooms
+- `handleBroadcast()`: Find room, delegate to Room.Broadcast()
+- `shutdown()`: Graceful cleanup of all rooms and clients
+
+**Missing Piece:**
+Identified that Client needs `room` field to complete architecture:
+
+- Required for Server to know which room client belongs to
+- Used in unregister to find correct room
+- Should be added to logger context
+
+#### Implementation Status:
+
+**Completed:**
+
+- ✅ `Client.readPump()` with full message handling
+- ✅ `Room` struct with all methods (Add, Remove, Broadcast, Size, IsEmpty)
+- ✅ Thread-safe room implementation
+- ✅ Non-blocking broadcast with statistics
+- ✅ Proper logging throughout
+
+**In Progress:**
+
+- 🔄 Server struct (guidance provided, ready to implement)
+- 🔄 Adding `room` field to Client struct
+
+**Next:**
+
+- Add `room` field to Client struct and update NewClient
+- Implement Server struct with hub pattern
+- Implement Server.Run() with channel-based event loop
+- Implement handleRegister, handleUnregister, handleBroadcast
+- Create WebSocket upgrade handler
+- Wire everything together
+
+#### Detailed Conversation Topics:
+
+See `ai-chat/` directory for full conversation details:
+
+- `27-readpump-implementation-review.md`: Review of readPump implementation
+- `28-nextreader-nextwriter-explanation.md`: How NextReader/NextWriter work, why no ticker needed
+- `29-websocket-frames-explained.md`: WebSocket frame structure and purpose
+- `30-network-stack-layers.md`: Full stack from WebSocket to Ethernet
+- `31-why-no-write-limit.md`: Trust boundaries and SetReadLimit vs SetWriteLimit
+- `32-setreadlimit-deep-dive.md`: How SetReadLimit prevents DoS at kernel level
+- `33-lying-in-websocket-headers.md`: Protocol protection against malicious headers
+- `34-http-upgrade-and-tcp-connections.md`: HTTP upgrade process and TCP connection lifecycle
+- `35-tcp-4-tuple-and-port-reuse.md`: How 4-tuples work, port multiplexing
+- `36-nat-and-router-port-mappings.md`: NAT operation, port mappings, multi-hop NAT
+- `37-readpump-updated-review.md`: Final readPump review after changes
+- `38-map-syntax-for-sets.md`: Correct map syntax for set pattern
+- `39-why-mutex-for-room-add.md`: Why mutexes are essential for thread safety
+- `40-how-to-delete-from-map.md`: Using delete() function in Go
+- `41-room-implementation-review.md`: Initial Room implementation review
+- `42-should-broadcast-take-context.md`: Why context isn't needed in fast operations
+- `43-broadcast-implementation-review.md`: Broadcast method review
+- `44-room-final-review.md`: Final Room review after fixes
+- `45-server-implementation-guide.md`: Complete Server implementation guide
+- `46-client-missing-room-field.md`: Identified missing room field in Client
+
+#### Next Steps:
+
+- Add `room` field to Client struct (id, username, room, conn, server, send, logger)
+- Update NewClient constructor to accept room parameter
+- Implement Server struct in `internal/server/server.go`
+- Implement Server.Run() with context-based event loop
+- Implement server handler methods (handleRegister, handleUnregister, handleBroadcast)
+- Test Server with multiple rooms and clients
+- Create WebSocket upgrade HTTP handler
+- Wire Server, Room, and Client together

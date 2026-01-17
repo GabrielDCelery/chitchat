@@ -15,6 +15,21 @@ const (
 	Typing
 )
 
+func (m MessageType) String() string {
+	switch m {
+	case Chat:
+		return "chat"
+	case Join:
+		return "join"
+	case Leave:
+		return "leave"
+	case Typing:
+		return "typing"
+	default:
+		return ""
+	}
+}
+
 func (mt MessageType) MarshalJSON() ([]byte, error) {
 	mtToStrMap := map[MessageType]string{
 		Chat:   "chat",
